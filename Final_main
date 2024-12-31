@@ -1,0 +1,416 @@
+//This one is less aggressive than the previous one
+
+import pandas as pd
+import numpy as np
+from flask import Flask, request, jsonify, render_template_string
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+import joblib
+from typing import Dict, Tuple
+from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import train_test_split
+
+app = Flask(__name__)
+
+# Simplified HTML template without payment method
+HTML_TEMPLATE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>UPI Fraud Detection System</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input, select {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .row {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 15px;
+        }
+        .col {
+            flex: 1;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            width: 100%;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        #result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 4px;
+        }
+        .fraudulent {
+            background-color: #ffebee;
+            border: 1px solid #ffcdd2;
+        }
+        .not-fraudulent {
+            background-color: #e8f5e9;
+            border: 1px solid #c8e6c9;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>UPI Fraud Detection System</h1>
+        
+        <div class="row">
+            <div class="col">
+                <div class="form-group">
+                    <label for="amount">Transaction Amount (₹):</label>
+                    <input type="number" id="amount" name="amount" required>
+                </div>
+            </div>
+            <div class="col">
+                <div class="form-group">
+                    <label for="location">Transaction Location:</label>
+                    <input type="text" id="location" name="location" required>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col">
+                <div class="form-group">
+                    <label for="merchant_category">Merchant Category:</label>
+                    <select id="merchant_category">
+                        <option value="Retail">Retail</option>
+                        <option value="E-commerce">E-commerce</option>
+                        <option value="Travel">Travel</option>
+                        <option value="Entertainment">Entertainment</option>
+                        <option value="Food">Food & Dining</option>
+                        <option value="Other">Other</option>
+                    </select>
+                </div>
+            </div>
+            <div class="col">
+                <div class="form-group">
+                    <label for="time_of_day">Time of Transaction:</label>
+                    <input type="time" id="time_of_day" required>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col">
+                <div class="form-group">
+                    <label for="device_type">Device Type:</label>
+                    <select id="device_type">
+                        <option value="Mobile">Mobile</option>
+                        <option value="Desktop">Desktop</option>
+                        <option value="Tablet">Tablet</option>
+                    </select>
+                </div>
+            </div>
+            <div class="col">
+                <div class="form-group">
+                    <label for="customer_age">Customer Account Age (months):</label>
+                    <input type="number" id="customer_age" required>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col">
+                <div class="form-group">
+                    <label for="transaction_frequency">Previous Transactions (last 30 days):</label>
+                    <input type="number" id="transaction_frequency" required>
+                </div>
+            </div>
+            <div class="col">
+                <div class="form-group">
+                    <label for="ip_address">IP Address:</label>
+                    <input type="text" id="ip_address" placeholder="xxx.xxx.xxx.xxx" required>
+                </div>
+            </div>
+        </div>
+
+        <button onclick="checkFraud()">Analyze Transaction</button>
+        <div id="result"></div>
+    </div>
+
+    <script>
+        function checkFraud() {
+            const data = {
+                Amount: parseFloat(document.getElementById('amount').value),
+                Location: document.getElementById('location').value,
+                Merchant_Category: document.getElementById('merchant_category').value,
+                Time_of_Day: document.getElementById('time_of_day').value,
+                Device_Type: document.getElementById('device_type').value,
+                Customer_Account_Age: parseInt(document.getElementById('customer_age').value),
+                Transaction_Frequency: parseInt(document.getElementById('transaction_frequency').value),
+                IP_Address: document.getElementById('ip_address').value
+            };
+
+            console.log('Sending data:', data);
+
+            fetch('/predict', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(data)
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Received response:', data);
+                const resultDiv = document.getElementById('result');
+                const className = data.prediction === 'Fraudulent' ? 'fraudulent' : 'not-fraudulent';
+                resultDiv.className = className;
+                resultDiv.innerHTML = `
+                    <h3>Analysis Result:</h3>
+                    <p><strong>Prediction:</strong> ${data.prediction}</p>
+                    <p><strong>Confidence:</strong> ${(data.probability * 100).toFixed(2)}%</p>
+                    <p><strong>Risk Factors:</strong> ${data.risk_factors}</p>
+                `;
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                document.getElementById('result').innerHTML = `Error: ${error.message}`;
+            });
+        }
+    </script>
+</body>
+</html>
+'''
+class MLFraudDetector:
+    def __init__(self):
+        self.model = RandomForestClassifier(
+            n_estimators=100,
+            max_depth=10,
+            random_state=42
+        )
+        self.scaler = StandardScaler()
+        self.label_encoders: Dict[str, LabelEncoder] = {}
+        self.categorical_columns = [
+            'Transaction_Type', 'Payment_Gateway', 'Transaction_City', 
+            'Transaction_State', 'Device_OS', 'Merchant_Category',
+            'Transaction_Channel'
+        ]
+        
+    def prepare_dataset(self, df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+        """Prepare the dataset for training"""
+        # Create copy to avoid modifying original data
+        data = df.copy()
+        
+        # Convert Date and Time to hour of day
+        if 'Time' in data.columns:
+            data['hour'] = pd.to_datetime(data['Time']).dt.hour
+        
+        # Extract features from IP Address (simplified)
+        if 'IP_Address' in data.columns:
+            data['ip_first_octet'] = data['IP_Address'].apply(
+                lambda x: int(x.split('.')[0]) if isinstance(x, str) else 0
+            )
+        else:
+            data['ip_first_octet'] = 0
+        
+        # Initialize label encoders for categorical columns
+        for column in self.categorical_columns:
+            if column in data.columns:
+                self.label_encoders[column] = LabelEncoder()
+                data[column] = self.label_encoders[column].fit_transform(data[column].astype(str))
+                
+        # Select features for training
+        features = [
+            'amount', 'hour', 'Transaction_Frequency',
+            'Transaction_Amount_Deviation', 'Days_Since_Last_Transaction',
+            'ip_first_octet'
+        ] + [col for col in self.categorical_columns if col in data.columns]
+        
+        # Ensure all required columns exist
+        for feature in features:
+            if feature not in data.columns:
+                data[feature] = 0
+        
+        X = data[features].values
+        y = data['fraud'].values
+        
+        return X, y
+    
+    def prepare_features(self, transaction: dict) -> np.ndarray:
+        """Convert transaction data into ML features"""
+        features = []
+        
+        # Numeric features
+        features.extend([
+            float(transaction.get('Amount', 0)),
+            int(transaction.get('Time_of_Day', '00:00').split(':')[0]),  # hour
+            int(transaction.get('Transaction_Frequency', 0)),
+            float(transaction.get('Transaction_Amount_Deviation', 0)),
+            int(transaction.get('Days_Since_Last_Transaction', 0)),
+            int(transaction.get('IP_Address', '0.0.0.0').split('.')[0])
+        ])
+        
+        # Categorical features
+        for column in self.categorical_columns:
+            value = transaction.get(column, 'unknown')
+            if column in self.label_encoders:
+                try:
+                    encoded_value = self.label_encoders[column].transform([str(value)])[0]
+                except ValueError:
+                    # Handle unseen categories
+                    encoded_value = 0
+            else:
+                encoded_value = 0
+            features.append(encoded_value)
+        
+        return np.array(features).reshape(1, -1)
+    
+    def train(self, df: pd.DataFrame) -> float:
+        """Train the model with the provided dataset"""
+        try:
+            # Prepare the dataset
+            X, y = self.prepare_dataset(df)
+            
+            # Split the data into training and testing sets
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, 
+                test_size=0.2, 
+                random_state=42, 
+                stratify=y
+            )
+            
+            # Scale features
+            X_train_scaled = self.scaler.fit_transform(X_train)
+            X_test_scaled = self.scaler.transform(X_test)
+            
+            # Train the model
+            self.model.fit(X_train_scaled, y_train)
+            
+            # Calculate and return test score
+            test_score = self.model.score(X_test_scaled, y_test)
+            
+            print(f"Model training completed:")
+            print(f"Number of training samples: {len(X_train)}")
+            print(f"Number of test samples: {len(X_test)}")
+            print(f"Test accuracy: {test_score:.4f}")
+            
+            return test_score
+            
+        except Exception as e:
+            print(f"Error in training: {str(e)}")
+            raise
+    def predict(self, transaction: dict) -> dict:
+        try:
+            features = self.prepare_features(transaction)
+            scaled_features = self.scaler.transform(features)
+            prediction = self.model.predict(scaled_features)[0]
+            proba = self.model.predict_proba(scaled_features)[0]
+    
+            risk_factors = []
+    
+        # Relaxed thresholds
+            if float(transaction.get('Amount', 0)) > 100000:
+                risk_factors.append("Very high transaction amount")
+    
+            hour = int(transaction.get('Time_of_Day', '00:00').split(':')[0])
+            if hour < 2 or hour > 23:
+                risk_factors.append("Unusual transaction time")
+    
+            if int(transaction.get('Transaction_Frequency', 0)) < 2:
+                risk_factors.append("Very low transaction history")
+    
+            if float(transaction.get('Transaction_Amount_Deviation', 0)) > 4:
+                risk_factors.append("Highly unusual transaction amount")
+    
+            if int(transaction.get('Days_Since_Last_Transaction', 0)) > 60:
+                risk_factors.append("Very long period since last transaction")
+    
+        # Reduce probability threshold
+            adjusted_proba = proba[1] * 0.7
+
+            return {
+                "prediction": "Fraudulent" if adjusted_proba > 0.8 else "Not Fraudulent",
+                "probability": float(adjusted_proba),
+                "risk_factors": ", ".join(risk_factors) if risk_factors else "None identified"
+        }
+    
+        except Exception as e:
+            print(f"Prediction error: {str(e)}")
+            return {
+                "prediction": "Error",
+                "probability": 0.0,
+                "risk_factors": str(e)
+        }
+    
+
+
+# Initialize the detector
+detector = MLFraudDetector()
+
+def train_model(data_path: str) -> float:
+    """Load data and train the model"""
+    try:
+        # Load the dataset
+        print(f"Loading dataset from {data_path}...")
+        df = pd.read_csv(data_path)
+        print(f"Dataset loaded successfully. Shape: {df.shape}")
+        
+        # Train the model
+        test_score = detector.train(df)
+        
+        return test_score
+        
+    except Exception as e:
+        print(f"Error training model: {str(e)}")
+        raise
+
+@app.route('/')
+def home():
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route('/predict', methods=['POST'])
+def predict():
+    try:
+        data = request.get_json(force=True)
+        result = detector.predict(data)
+        return jsonify(result)
+    except Exception as e:
+        print(f"API error: {str(e)}")
+        return jsonify({
+            "prediction": "Error",
+            "probability": 0.0,
+            "risk_factors": f"System error: {str(e)}"
+        }), 400
+
+if __name__ == '__main__':
+    # Train the model before starting the server
+    # Replace 'your_dataset.csv' with your actual dataset path
+    train_model(r'C:\Users\Dhruv\Desktop\UPI_data.csv')
+    
+    # Start the Flask server
+    app.run(debug=True, host='0.0.0.0', port=5000)
